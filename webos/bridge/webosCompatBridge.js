@@ -1170,6 +1170,39 @@
             return true;
         }
     }
+    // The packaged webOS fMP4 -> MPEG-TS remuxer currently understands
+    // AVC (avc1/avc3) video plus AAC (mp4a) audio only. Do not feed it HEVC,
+    // AV1, portrait renditions, or unsupported audio codec combinations.
+    function isWebOsRemuxCompatibleQuality(quality) {
+        if (!quality || !quality.url) return false;
+        if (quality.width > 0 && quality.resolution > 0 && quality.width < quality.resolution) return false;
+        if (!quality.codecs) return false;
+
+        var parts = String(quality.codecs).toLowerCase().split(',');
+        var hasAvc = false;
+        var i;
+        for (i = 0; i < parts.length; i++) {
+            var codec = parts[i].replace(/^\s+|\s+$/g, '');
+            if (!codec) continue;
+            if (codec.indexOf('avc1') === 0 || codec.indexOf('avc3') === 0) {
+                hasAvc = true;
+            } else if (codec.indexOf('mp4a') !== 0) {
+                return false;
+            }
+        }
+        return hasAvc;
+    }
+
+    function filterWebOsRemuxQualities(list) {
+        var out = [];
+        if (!list || !list.length) return out;
+        var i;
+        for (i = 0; i < list.length; i++) {
+            if (isWebOsRemuxCompatibleQuality(list[i])) out.push(list[i]);
+        }
+        return out;
+    }
+
     // Resolves a relative URL to absolute.
     function toAbsoluteUrl(url, base) {
         if (!url || typeof url !== 'string') return '';
@@ -1434,22 +1467,27 @@
             if (streamLine.toUpperCase().indexOf('#EXT-X-STREAM-INF:') !== 0) continue;
             var n = l[i + 1] && typeof l[i + 1] === 'string' ? l[i + 1].trim() : '';
             if (!n || n.indexOf('#') === 0) continue;
-            var rm = streamLine.match(/RESOLUTION=\d+x(\d+)/i);
+            var rm = streamLine.match(/RESOLUTION=(\d+)x(\d+)/i);
             var fm = streamLine.match(/FRAME-RATE=([0-9.]+)/i);
             var cm = streamLine.match(/CODECS="([^"]+)"/i);
             var bm = streamLine.match(/(?:AVERAGE-)?BANDWIDTH=(\d+)/i);
-            var r = rm && rm[1] ? parseInt(rm[1], 10) : 0;
+            var width = rm && rm[1] ? parseInt(rm[1], 10) : 0;
+            var r = rm && rm[2] ? parseInt(rm[2], 10) : 0;
             var f = fm && fm[1] ? Math.round(parseFloat(fm[1]) / 10) * 10 : 30;
             var bw = bm && bm[1] ? parseInt(bm[1], 10) : 0;
             var id = r > 0 ? r + 'p' + f : 'Auto';
-            var item = {id: id, resolution: r, url: toAbsoluteUrl(n, rawBaseUri), codecs: cm && cm[1] ? cm[1] : '', bandwidth: bw > 0 ? bw : 0, fps: f};
+            var item = {id: id, width: width, resolution: r, url: toAbsoluteUrl(n, rawBaseUri), codecs: cm && cm[1] ? cm[1] : '', bandwidth: bw > 0 ? bw : 0, fps: f};
             if (typeof seen[id] === 'undefined') {
                 seen[id] = out.length;
                 out.push(item);
             } else {
                 var idx = seen[id];
                 var oldItem = out[idx];
-                if (!isCodecSetSupported(oldItem.codecs) && isCodecSetSupported(item.codecs)) {
+                // Multiple encodes can share resolution/FPS. Prefer the AVC/AAC
+                // rendition because the local fMP4 remuxer cannot mux HEVC/AV1.
+                if (isWebOsRemuxCompatibleQuality(item) && !isWebOsRemuxCompatibleQuality(oldItem)) {
+                    out[idx] = item;
+                } else if (!isCodecSetSupported(oldItem.codecs) && isCodecSetSupported(item.codecs)) {
                     out[idx] = item;
                 }
             }
@@ -3142,6 +3180,21 @@
         ms.rawUri = limitUsherCodecs(u || '');
         ms.playlist = pl || '';
         ms.q = parseQ(ms.playlist, ms.rawUri);
+        if (ms.type === 2 && ms.q.length > 0) {
+            var vodQualitiesBeforeFilter = ms.q.length;
+            var vodRemuxQualities = filterWebOsRemuxQualities(ms.q);
+            if (vodRemuxQualities.length > 0) {
+                ms.q = vodRemuxQualities;
+                bridgeDebugLog('vod_h264_quality_filter', {
+                    before: vodQualitiesBeforeFilter,
+                    after: ms.q.length
+                });
+            } else {
+                // Keep the original list if Twitch exposes no AVC/AAC rendition;
+                // the format probe will report that remux cannot safely proceed.
+                bridgeDebugLog('vod_h264_quality_unavailable', {variants: ms.q.length});
+            }
+        }
         if (isLiveStreamState(ms) && ms.q.length > 0) {
             ms.q = filterLiveQualities(ms.q);
         }
@@ -4082,26 +4135,39 @@
                     // is a per-stream property (transcode stack), so any variant
                     // works, but the quality position wins when already set.
                     var q = parseQ(text, probeUrl);
+                    var remuxQualities = filterWebOsRemuxQualities(q);
                     var variantUrl = '';
-                    if (ms.qp >= 0 && ms.q[ms.qp] && ms.q[ms.qp].url) variantUrl = ms.q[ms.qp].url;
-                    else if (q.length) {
-                        // No quality chosen yet: default to the highest variant
-                        // at or below MSE_DEFAULT_MAX_RES. A 1080p60 fMP4
-                        // segment can be ~10MB; fetching it cold takes longer
-                        // than the app's start watchdog allows, while a low
-                        // variant starts in seconds (native ABR also ramps up
-                        // from a low variant). SetQuality upgrades later.
+                    if (ms.qp >= 0 && ms.q[ms.qp] && isWebOsRemuxCompatibleQuality(ms.q[ms.qp])) {
+                        variantUrl = ms.q[ms.qp].url;
+                    }
+                    if (!variantUrl && remuxQualities.length) {
+                        // Enhanced Broadcasting can put HEVC/AV1, AVC, and
+                        // portrait variants in one master. Select a landscape
+                        // AVC/AAC rendition for the legacy webOS fMP4 remuxer.
                         var cap = mainMaxRes > 0 ? mainMaxRes : MSE_DEFAULT_MAX_RES;
                         var pick = null;
                         var qi2;
-                        for (qi2 = 0; qi2 < q.length; qi2++) {
-                            if (q[qi2].resolution > 0 && q[qi2].resolution <= cap) {
-                                pick = q[qi2];
+                        for (qi2 = 0; qi2 < remuxQualities.length; qi2++) {
+                            if (remuxQualities[qi2].resolution > 0 && remuxQualities[qi2].resolution <= cap) {
+                                pick = remuxQualities[qi2];
                                 break;
                             }
                         }
-                        if (!pick) pick = q[q.length - 1];
+                        // If every compatible rendition is above the cap, use
+                        // the lowest compatible rung instead of an HEVC variant.
+                        if (!pick) pick = remuxQualities[remuxQualities.length - 1];
                         variantUrl = pick.url;
+                        if (!ms.q.length) ms.q = remuxQualities;
+                    }
+                    if (!variantUrl) {
+                        bridgeDebugLog('mse_probe_no_compatible_avc_variant', {
+                            variants: q.length,
+                            compatibleAvc: remuxQualities.length
+                        });
+                        // Keep native HLS attached as a last resort. The bridge
+                        // must not deliberately send HEVC/AV1 fMP4 into the
+                        // AVC-only MPEG-TS remuxer (which would spin forever).
+                        return;
                     }
                     if (variantUrl && variantUrl !== probeUrl) {
                         attemptProbe(variantUrl, true, 1);
