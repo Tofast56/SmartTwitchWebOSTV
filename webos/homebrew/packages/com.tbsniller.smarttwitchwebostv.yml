@@ -1,6 +1,6 @@
 title: SmartTwitchWebOSTV
-iconUri: https://raw.githubusercontent.com/TBSniller/SmartTwitchWebOSTV/master/release/githubio/images/icon_circle.png
-manifestUrl: https://github.com/TBSniller/SmartTwitchWebOSTV/releases/latest/download/com.tbsniller.smarttwitchwebostv.manifest.json
+iconUri: https://raw.githubusercontent.com/Tofast56/SmartTwitchWebOSTV/master/release/githubio/images/icon_circle.png
+manifestUrl: https://github.com/Tofast56/SmartTwitchWebOSTV/releases/latest/download/com.tbsniller.smarttwitchwebostv.manifest.json
 category: internet
 pool: main
 description: |
@@ -23,4 +23,4 @@ description: |
   https://www.youtube.com/watch?v=PI2yrGb3pnY
 
   ## Source
-  https://github.com/TBSniller/SmartTwitchWebOSTV
+  https://github.com/Tofast56/SmartTwitchWebOSTV
