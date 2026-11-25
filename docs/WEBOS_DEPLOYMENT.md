@@ -39,7 +39,7 @@ npm run webos:remove
 - Artifact generation script:
   - `npm run release:artifacts`
 - Stable manifest URL contract:
-  - `https://github.com/TBSniller/SmartTwitchWebOSTV/releases/latest/download/com.tbsniller.smarttwitchwebostv.manifest.json`
+  - `https://github.com/Tofast56/SmartTwitchWebOSTV/releases/latest/download/com.tbsniller.smarttwitchwebostv.manifest.json`
 
 ## GitHub Release Automation
 
@@ -64,8 +64,8 @@ Workflow: `.github/workflows/deploy-pages.yml`
   3. upload `.pages` artifact
   4. deploy via Pages Actions
 - Channel contract:
-  - Stable hosted app remains `/release/index.html` from `master`
-  - Dev hosted app is `/dev/index.html` from `dev/publish-pages`
+  - Stable hosted app: `https://tofast56.github.io/SmartTwitchWebOSTV/release/index.html` from `master`
+  - Dev hosted app: `https://tofast56.github.io/SmartTwitchWebOSTV/dev/index.html` from `dev/publish-pages`
 
 ## Dev Prerelease Automation
 
